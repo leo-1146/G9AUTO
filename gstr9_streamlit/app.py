@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 import pdfplumber, openpyxl
 
+from ais_extractor import build_ais_workbook, read_ais_json
+
 # ── Page config ────────────────────────────────────────────
 st.set_page_config(
     page_title="GSTR-9 Auto Fill",
@@ -248,76 +250,126 @@ def process(zip_bytes):
         shutil.rmtree(tmpdir,ignore_errors=True)
 
 # ── UI ─────────────────────────────────────────────────────
-st.markdown("""
+tool = st.radio(
+    "Choose a tool",
+    ("GSTR-9 Auto Fill", "AIS JSON Extractor"),
+    horizontal=True,
+)
+
+if tool == "AIS JSON Extractor":
+    st.markdown(
+        """
 <div class="title-box">
-  <h1>📊 GSTR-9 Auto Fill</h1>
-  <p>Upload your party zip → Get filled GSTR-9 in seconds</p>
+  <h1>🧾 AIS JSON Extractor</h1>
+  <p>Convert Income Tax portal AIS reported data into a reviewable Excel workbook.</p>
 </div>
-""", unsafe_allow_html=True)
+""",
+        unsafe_allow_html=True,
+    )
+    st.info(
+        "Upload the readable JSON downloaded from the AIS portal. Encrypted or non-JSON "
+        "downloads must first be opened/exported using the official AIS Utility."
+    )
+    st.markdown(
+        "The generated workbook includes an **Index** and a worksheet for every "
+        "reported-data category discovered in the file."
+    )
 
-st.markdown("""
-<div class="info-card">
-<b>📦 What to include in the zip:</b><br><br>
-✅ &nbsp;Full Year 3B Report.xlsx<br>
-✅ &nbsp;GSTR-3B Sales Summary.xlsx<br>
-✅ &nbsp;GSTR-3B ITC Summary.xlsx<br>
-✅ &nbsp;GSTR-1 Sales Summary.xlsx<br>
-✅ &nbsp;All 12 GSTR-3B monthly PDFs &nbsp;<small>(filename must contain <b>GSTR3B</b>)</small><br>
-✅ &nbsp;All 12 GSTR-1 monthly PDFs &nbsp;&nbsp;&nbsp;<small>(filename must contain <b>GSTR1</b>)</small>
-</div>
-""", unsafe_allow_html=True)
-
-uploaded = st.file_uploader(
-    "Drop your zip file here",
-    type=["zip"],
-    help="All Speqta reports + monthly PDFs in one zip"
-)
-
-if uploaded:
-    st.markdown(f"**File:** `{uploaded.name}` &nbsp;·&nbsp; `{uploaded.size/1024:.0f} KB`")
-
-    if st.button("⚡ Generate Filled GSTR-9", type="primary", use_container_width=True):
-        with st.spinner("Processing… reading PDFs and filling data…"):
+    ais_file = st.file_uploader("Upload AIS JSON file", type=["json"])
+    if ais_file:
+        st.markdown(f"**File:** `{ais_file.name}` · `{ais_file.size / 1024:.0f} KB`")
+        if st.button("Extract reported data", type="primary", use_container_width=True):
             try:
-                result = process(uploaded.read())
-
-                if result['missing']:
-                    for m in result['missing']:
-                        labels={'fullyr':'Full Year 3B Report','speqta3b':'GSTR-3B Sales Summary',
-                                'itc':'GSTR-3B ITC Summary','gstr1ss':'GSTR-1 Sales Summary'}
-                        st.markdown(f'<div class="warn-card">⚠️ <b>{labels.get(m,m)}</b> not found in zip — that section was skipped.</div>',
-                                    unsafe_allow_html=True)
-
-                st.markdown(f"""
-<div class="success-card">
-  <b style="font-size:16px;">✅ Done — {result['total']} cells filled</b><br>
-  <span style="color:#166534">Party: <b>{result['party']}</b></span>
-  <div class="metric-row">
-    <div class="metric"><div class="num">{result['t_dates']}</div><div class="lbl">Filing Dates</div></div>
-    <div class="metric"><div class="num">{result['t_out']}</div><div class="lbl">3B Outward</div></div>
-    <div class="metric"><div class="num">{result['t_in']}</div><div class="lbl">3B Inward</div></div>
-    <div class="metric"><div class="num">{result['t_g1']}</div><div class="lbl">GSTR-1 Sheet</div></div>
-    <div class="metric"><div class="num">{result['t_pay']}</div><div class="lbl">Payment of Tax</div></div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-                filename = f"GSTR9_FILLED_{result['party'].replace(' ','_')[:25]}.xlsm"
-                st.download_button(
-                    label="⬇️  Download Filled GSTR-9",
-                    data=result['bytes'],
-                    file_name=filename,
-                    mime="application/vnd.ms-excel.sheet.macroEnabled.12",
-                    use_container_width=True
+                with st.spinner("Reading AIS data and creating Excel workbook…"):
+                    output, row_counts = build_ais_workbook(
+                        read_ais_json(ais_file.getvalue())
+                    )
+                st.success(
+                    f"Extracted {sum(row_counts.values())} reported rows across "
+                    f"{len(row_counts)} categories."
                 )
+                st.download_button(
+                    "⬇️ Download AIS reported data (.xlsx)",
+                    output,
+                    "AIS_REPORTED_DATA.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            except ValueError as error:
+                st.error(str(error))
+            except Exception as error:
+                st.error(f"Could not extract the AIS file: {error}")
+else:
+    st.markdown("""
+    <div class="title-box">
+      <h1>📊 GSTR-9 Auto Fill</h1>
+      <p>Upload your party zip → Get filled GSTR-9 in seconds</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-            except Exception as e:
-                st.error(f"Error: {e}")
+    st.markdown("""
+    <div class="info-card">
+    <b>📦 What to include in the zip:</b><br><br>
+    ✅ &nbsp;Full Year 3B Report.xlsx<br>
+    ✅ &nbsp;GSTR-3B Sales Summary.xlsx<br>
+    ✅ &nbsp;GSTR-3B ITC Summary.xlsx<br>
+    ✅ &nbsp;GSTR-1 Sales Summary.xlsx<br>
+    ✅ &nbsp;All 12 GSTR-3B monthly PDFs &nbsp;<small>(filename must contain <b>GSTR3B</b>)</small><br>
+    ✅ &nbsp;All 12 GSTR-1 monthly PDFs &nbsp;&nbsp;&nbsp;<small>(filename must contain <b>GSTR1</b>)</small>
+    </div>
+    """, unsafe_allow_html=True)
 
-st.markdown("---")
-st.markdown(
-    "<div style='text-align:center;color:#9ca3af;font-size:12px'>"
-    "GSTR-9 Auto Fill &nbsp;·&nbsp; Difference cell = 0 guaranteed &nbsp;·&nbsp; Zero manual entry"
-    "</div>",
-    unsafe_allow_html=True
-)
+    uploaded = st.file_uploader(
+        "Drop your zip file here",
+        type=["zip"],
+        help="All Speqta reports + monthly PDFs in one zip"
+    )
+
+    if uploaded:
+        st.markdown(f"**File:** `{uploaded.name}` &nbsp;·&nbsp; `{uploaded.size/1024:.0f} KB`")
+
+        if st.button("⚡ Generate Filled GSTR-9", type="primary", use_container_width=True):
+            with st.spinner("Processing… reading PDFs and filling data…"):
+                try:
+                    result = process(uploaded.read())
+
+                    if result['missing']:
+                        for m in result['missing']:
+                            labels={'fullyr':'Full Year 3B Report','speqta3b':'GSTR-3B Sales Summary',
+                                    'itc':'GSTR-3B ITC Summary','gstr1ss':'GSTR-1 Sales Summary'}
+                            st.markdown(f'<div class="warn-card">⚠️ <b>{labels.get(m,m)}</b> not found in zip — that section was skipped.</div>',
+                                        unsafe_allow_html=True)
+
+                    st.markdown(f"""
+    <div class="success-card">
+      <b style="font-size:16px;">✅ Done — {result['total']} cells filled</b><br>
+      <span style="color:#166534">Party: <b>{result['party']}</b></span>
+      <div class="metric-row">
+        <div class="metric"><div class="num">{result['t_dates']}</div><div class="lbl">Filing Dates</div></div>
+        <div class="metric"><div class="num">{result['t_out']}</div><div class="lbl">3B Outward</div></div>
+        <div class="metric"><div class="num">{result['t_in']}</div><div class="lbl">3B Inward</div></div>
+        <div class="metric"><div class="num">{result['t_g1']}</div><div class="lbl">GSTR-1 Sheet</div></div>
+        <div class="metric"><div class="num">{result['t_pay']}</div><div class="lbl">Payment of Tax</div></div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+                    filename = f"GSTR9_FILLED_{result['party'].replace(' ','_')[:25]}.xlsm"
+                    st.download_button(
+                        label="⬇️  Download Filled GSTR-9",
+                        data=result['bytes'],
+                        file_name=filename,
+                        mime="application/vnd.ms-excel.sheet.macroEnabled.12",
+                        use_container_width=True
+                    )
+
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    st.markdown("---")
+    st.markdown(
+        "<div style='text-align:center;color:#9ca3af;font-size:12px'>"
+        "GSTR-9 Auto Fill &nbsp;·&nbsp; Difference cell = 0 guaranteed &nbsp;·&nbsp; Zero manual entry"
+        "</div>",
+        unsafe_allow_html=True
+    )
